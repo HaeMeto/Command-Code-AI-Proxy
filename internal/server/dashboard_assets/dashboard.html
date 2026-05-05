@@ -1,0 +1,314 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <title>commandcode-proxy analytics</title>
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <style>
+      :root { color-scheme: light dark; }
+      body {
+        font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+        margin: 0; padding: 24px; background: #0b0d12; color: #e8eaf0;
+      }
+      h1 { margin: 0 0 8px; font-size: 22px; font-weight: 600; }
+      h2 { margin: 32px 0 12px; font-size: 16px; font-weight: 600; opacity: 0.85; }
+      .sub { opacity: 0.7; font-size: 13px; margin-bottom: 24px; }
+      .cards { display: grid; grid-template-columns: repeat(auto-fit, minmax(180px, 1fr)); gap: 12px; }
+      .card { background: #161922; border: 1px solid #232735; border-radius: 10px; padding: 14px 16px; }
+      .card .label { font-size: 11px; letter-spacing: 0.06em; text-transform: uppercase; opacity: 0.6; }
+      .card .value { font-size: 24px; font-weight: 600; margin-top: 6px; }
+      .charts { display: grid; grid-template-columns: 2fr 1fr; gap: 16px; margin-top: 16px; }
+      @media (max-width: 800px) { .charts { grid-template-columns: 1fr; } }
+      .chart-box { background: #161922; border: 1px solid #232735; border-radius: 10px; padding: 16px; }
+      table { width: 100%; border-collapse: collapse; font-size: 13px; }
+      th, td { text-align: left; padding: 8px 10px; border-bottom: 1px solid #232735; }
+      th { opacity: 0.6; font-weight: 500; }
+      .pill { display: inline-block; padding: 2px 8px; border-radius: 999px; font-size: 11px; font-weight: 600; }
+      .pill.ok { background: #173527; color: #5dd8a3; }
+      .pill.bad { background: #3a1c20; color: #ff8a8a; }
+      footer { opacity: 0.5; font-size: 12px; margin-top: 32px; }
+      .auth { background: #2a2419; border: 1px solid #4a3d24; padding: 8px 12px; border-radius: 8px; margin-bottom: 16px; font-size: 13px; }
+      input, button { background: #0b0d12; color: #e8eaf0; border: 1px solid #232735; padding: 6px 10px; border-radius: 6px; font: inherit; }
+      button { cursor: pointer; }
+      button:hover { background: #161922; }
+      .row { display: flex; gap: 8px; align-items: center; }
+      .view-btn { padding: 2px 8px; font-size: 11px; }
+
+      /* modal */
+      .modal-backdrop {
+        position: fixed; inset: 0; background: rgba(0,0,0,0.65);
+        display: none; align-items: flex-start; justify-content: center;
+        padding: 32px 16px; z-index: 100; overflow-y: auto;
+      }
+      .modal-backdrop.open { display: flex; }
+      .modal {
+        background: #0f1218; border: 1px solid #2a3046; border-radius: 12px;
+        width: 100%; max-width: 1100px; box-shadow: 0 20px 60px rgba(0,0,0,0.6);
+      }
+      .modal-header {
+        display: flex; justify-content: space-between; align-items: center;
+        padding: 14px 18px; border-bottom: 1px solid #232735;
+      }
+      .modal-header h2 { margin: 0; font-size: 16px; }
+      .modal-body { padding: 14px 18px 18px; }
+      .modal .meta {
+        display: grid; grid-template-columns: repeat(auto-fit, minmax(140px, 1fr));
+        gap: 8px 16px; font-size: 12px; margin-bottom: 14px;
+      }
+      .modal .meta div { display: flex; flex-direction: column; }
+      .modal .meta .k { opacity: 0.55; text-transform: uppercase; letter-spacing: 0.05em; font-size: 10px; }
+      .modal .meta .v { font-weight: 600; word-break: break-all; }
+      .panels { display: grid; grid-template-columns: 1fr 1fr; gap: 12px; }
+      @media (max-width: 800px) { .panels { grid-template-columns: 1fr; } }
+      .panel { background: #161922; border: 1px solid #232735; border-radius: 8px; padding: 10px 12px; }
+      .panel h3 { margin: 0 0 6px; font-size: 12px; text-transform: uppercase; letter-spacing: 0.05em; opacity: 0.7; }
+      .panel pre {
+        margin: 0; max-height: 280px; overflow: auto;
+        font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+        font-size: 11.5px; line-height: 1.45; color: #d8dde8;
+        white-space: pre-wrap; word-break: break-word;
+      }
+      .panel .empty { opacity: 0.45; font-size: 12px; font-style: italic; }
+      .modal-close {
+        background: transparent; border: 0; color: #e8eaf0; font-size: 22px; cursor: pointer; padding: 0 6px;
+      }
+    </style>
+  </head>
+  <body>
+    <h1>commandcode-proxy analytics</h1>
+    <div class="sub" id="sub">loading…</div>
+
+    <div id="auth" class="auth" style="display:none">
+      <strong>Admin token required.</strong>
+      <div class="row" style="margin-top:6px">
+        <input id="token" placeholder="ADMIN_TOKEN" />
+        <button onclick="setToken()">Use</button>
+      </div>
+    </div>
+
+    <div class="cards" id="totals"></div>
+
+    <div class="charts">
+      <div class="chart-box">
+        <h2>Last 24 hours</h2>
+        <canvas id="hourChart" height="120"></canvas>
+      </div>
+      <div class="chart-box">
+        <h2>Requests by model</h2>
+        <canvas id="modelChart" height="120"></canvas>
+      </div>
+    </div>
+
+    <div class="charts" style="grid-template-columns: 1fr 1fr">
+      <div class="chart-box">
+        <h2>Last 30 days</h2>
+        <canvas id="dayChart" height="120"></canvas>
+      </div>
+      <div class="chart-box">
+        <h2>Requests by provider</h2>
+        <canvas id="providerChart" height="120"></canvas>
+      </div>
+    </div>
+
+    <h2>Recent requests</h2>
+    <div class="chart-box" style="overflow-x:auto">
+      <table id="recent">
+        <thead>
+          <tr>
+            <th>Time</th><th>Path</th><th>Status</th><th>Model</th><th>Provider</th>
+            <th>Input</th><th>Output</th><th>Cache R/C</th><th>Duration</th><th>Message ID</th><th>Stop</th><th>Error</th><th></th>
+          </tr>
+        </thead>
+        <tbody></tbody>
+      </table>
+    </div>
+
+    <footer>auto-refresh every 10s · <a href="/analytics" style="color:#7eb6ff">/analytics</a> · <a href="/healthz" style="color:#7eb6ff">/healthz</a></footer>
+
+    <div id="detailModal" class="modal-backdrop" onclick="if(event.target===this)closeDetail()">
+      <div class="modal" role="dialog" aria-modal="true" aria-labelledby="modalTitle">
+        <div class="modal-header">
+          <h2 id="modalTitle">Request detail</h2>
+          <button class="modal-close" aria-label="close" onclick="closeDetail()">×</button>
+        </div>
+        <div class="modal-body" id="modalBody">loading…</div>
+      </div>
+    </div>
+
+    <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.1/dist/chart.umd.min.js"></script>
+    <script>
+      let token = localStorage.getItem("admin_token") || new URLSearchParams(location.search).get("token") || "";
+      let charts = {};
+      function setToken() {
+        token = document.getElementById("token").value.trim();
+        localStorage.setItem("admin_token", token);
+        load();
+      }
+      function authHeaders() { return token ? { "x-admin-token": token } : {}; }
+      function fmtNum(n) { return Number(n || 0).toLocaleString(); }
+      function statusPill(s) {
+        const ok = s >= 200 && s < 300;
+        return `<span class="pill ${ok ? "ok" : "bad"}">${s || "—"}</span>`;
+      }
+      async function load() {
+        try {
+          const res = await fetch("/analytics", { headers: authHeaders() });
+          if (res.status === 401) { document.getElementById("auth").style.display = "block"; return; }
+          document.getElementById("auth").style.display = "none";
+          const data = await res.json();
+          renderTotals(data.totals);
+          renderHour(data.last_24h_hours);
+          renderDay(data.last_30d_days);
+          renderModel(data.by_model);
+          renderProvider(data.by_provider);
+
+          const recent = await fetch("/analytics/recent?limit=25", { headers: authHeaders() }).then(r => r.json());
+          renderRecent(recent.items || []);
+          document.getElementById("sub").textContent =
+            "last update " + new Date().toLocaleTimeString();
+        } catch (e) {
+          document.getElementById("sub").textContent = "error: " + e.message;
+        }
+      }
+      function renderTotals(t) {
+        const cards = [
+          ["Total requests", fmtNum(t.total_requests)],
+          ["Success", fmtNum(t.success_count)],
+          ["Errors", fmtNum(t.error_count)],
+          ["Success rate", t.total_requests ? (100 * t.success_count / t.total_requests).toFixed(1) + "%" : "—"],
+          ["Input tokens", fmtNum(t.total_input_tokens)],
+          ["Output tokens", fmtNum(t.total_output_tokens)],
+          ["Cache read", fmtNum(t.total_cache_read)],
+          ["Avg duration", t.avg_duration_ms + " ms"],
+          ["Max duration", t.max_duration_ms + " ms"],
+        ];
+        document.getElementById("totals").innerHTML = cards.map(c =>
+          `<div class="card"><div class="label">${c[0]}</div><div class="value">${c[1]}</div></div>`
+        ).join("");
+      }
+      function lineChart(elId, points, label) {
+        if (charts[elId]) charts[elId].destroy();
+        const ctx = document.getElementById(elId);
+        charts[elId] = new Chart(ctx, {
+          type: "line",
+          data: {
+            labels: points.map(p => p.bucket),
+            datasets: [
+              { label: "requests", data: points.map(p => p.count), borderColor: "#7eb6ff", tension: 0.3 },
+              { label: "input tok", data: points.map(p => p.input_tokens), borderColor: "#5dd8a3", tension: 0.3, hidden: true },
+              { label: "output tok", data: points.map(p => p.output_tokens), borderColor: "#f4b860", tension: 0.3, hidden: true },
+            ],
+          },
+          options: { plugins: { legend: { labels: { color: "#e8eaf0" } } }, scales: { x: { ticks: { color: "#aaa" } }, y: { ticks: { color: "#aaa" } } } },
+        });
+      }
+      function donut(elId, items, key, valueKey) {
+        if (charts[elId]) charts[elId].destroy();
+        const ctx = document.getElementById(elId);
+        charts[elId] = new Chart(ctx, {
+          type: "doughnut",
+          data: {
+            labels: items.map(i => i[key]),
+            datasets: [{ data: items.map(i => i[valueKey]), backgroundColor: ["#7eb6ff","#5dd8a3","#f4b860","#ff8a8a","#b48bff","#79e2f2","#ffa07a","#a3d977"] }],
+          },
+          options: { plugins: { legend: { labels: { color: "#e8eaf0" } } } },
+        });
+      }
+      function renderHour(p) { lineChart("hourChart", p, "by hour"); }
+      function renderDay(p)  { lineChart("dayChart", p, "by day"); }
+      function renderModel(items)    { donut("modelChart", items, "model", "count"); }
+      function renderProvider(items) { donut("providerChart", items, "provider", "count"); }
+      function escapeHTML(s) {
+        return String(s == null ? "" : s).replace(/[&<>"']/g, c =>
+          ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" })[c]
+        );
+      }
+      function renderRecent(items) {
+        const tbody = document.querySelector("#recent tbody");
+        tbody.innerHTML = items.map(i => `
+          <tr>
+            <td>${i.created_at ? new Date(i.created_at).toLocaleTimeString() : "—"}</td>
+            <td><code>${escapeHTML(i.path || "—")}</code></td>
+            <td>${statusPill(i.status_code)}</td>
+            <td>${escapeHTML(i.model || "—")}</td>
+            <td>${escapeHTML(i.provider || "—")}</td>
+            <td>${fmtNum(i.input_tokens)}</td>
+            <td>${fmtNum(i.output_tokens)}</td>
+            <td>${fmtNum(i.cache_read)}/${fmtNum(i.cache_creation)}</td>
+            <td>${i.duration_ms} ms</td>
+            <td><code style="font-size:11px">${escapeHTML((i.message_id || "").slice(0, 18))}</code></td>
+            <td>${escapeHTML(i.stop_reason || "—")}</td>
+            <td style="color:#ff8a8a">${escapeHTML(i.error_message || "")}</td>
+            <td><button class="view-btn" onclick="openDetail(${i.id})">View</button></td>
+          </tr>
+        `).join("");
+      }
+
+      function prettyMaybeJSON(s) {
+        if (!s) return "";
+        const trimmed = s.trim();
+        if (trimmed.startsWith("{") || trimmed.startsWith("[")) {
+          try { return JSON.stringify(JSON.parse(trimmed), null, 2); } catch { /* fallthrough */ }
+        }
+        return s;
+      }
+      function panel(title, body) {
+        const content = body ? `<pre>${escapeHTML(prettyMaybeJSON(body))}</pre>` : `<div class="empty">(empty — not captured for this request)</div>`;
+        return `<div class="panel"><h3>${escapeHTML(title)}</h3>${content}</div>`;
+      }
+      async function openDetail(id) {
+        const modal = document.getElementById("detailModal");
+        const body = document.getElementById("modalBody");
+        document.getElementById("modalTitle").textContent = `Request detail · #${id}`;
+        body.innerHTML = "loading…";
+        modal.classList.add("open");
+        try {
+          const res = await fetch(`/analytics/detail/${id}`, { headers: authHeaders() });
+          if (!res.ok) {
+            body.innerHTML = `<div class="empty">failed to load: HTTP ${res.status}</div>`;
+            return;
+          }
+          const d = await res.json();
+          const meta = [
+            ["id", d.id],
+            ["path", d.path],
+            ["status", d.status_code],
+            ["duration", (d.duration_ms || 0) + " ms"],
+            ["provider", d.provider || "—"],
+            ["model", d.model || "—"],
+            ["input tokens", fmtNum(d.input_tokens)],
+            ["output tokens", fmtNum(d.output_tokens)],
+            ["message id", d.message_id || "—"],
+            ["stop reason", d.stop_reason || "—"],
+            ["created at", d.created_at],
+            ["client ip", d.ip || "—"],
+            ["user agent", d.user_agent || "—"],
+            ["cc version", d.version_header || "—"],
+          ];
+          const errorRow = d.error_message
+            ? `<div class="panel" style="grid-column:1/-1;border-color:#5a2d34;background:#2a181b"><h3 style="color:#ff8a8a">error</h3><pre>${escapeHTML(d.error_message)}</pre></div>`
+            : "";
+          body.innerHTML = `
+            <div class="meta">${meta.map(([k,v]) => `<div><span class="k">${escapeHTML(k)}</span><span class="v">${escapeHTML(String(v ?? "—"))}</span></div>`).join("")}</div>
+            <div class="panels">
+              ${panel("Client request (what user sent — e.g. OpenAI / OpenRouter shape)", d.client_request_body)}
+              ${panel("Upstream request (what proxy sent to CommandCode)", d.upstream_request_body)}
+              ${panel("Upstream response (raw from CommandCode)", d.upstream_response_body)}
+              ${panel("Client response (what proxy returned to user)", d.client_response_body)}
+              ${errorRow}
+            </div>
+          `;
+        } catch (e) {
+          body.innerHTML = `<div class="empty">error: ${escapeHTML(e.message)}</div>`;
+        }
+      }
+      function closeDetail() {
+        document.getElementById("detailModal").classList.remove("open");
+      }
+      document.addEventListener("keydown", e => { if (e.key === "Escape") closeDetail(); });
+
+      load();
+      setInterval(load, 10000);
+    </script>
+  </body>
+</html>

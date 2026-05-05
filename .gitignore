@@ -1,0 +1,18 @@
+# local config
+.env
+.env.local
+
+# data / runtime
+data/
+*.db
+*.db-shm
+*.db-wal
+
+# build output
+bin/
+/commandcode-proxy
+
+# go test / coverage
+*.test
+*.out
+coverage.txt
