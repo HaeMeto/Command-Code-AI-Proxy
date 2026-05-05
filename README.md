@@ -28,6 +28,8 @@ You can join for only **$1/month**:
 
 [https://commandcode.ai](https://commandcode.ai/haemeto)
 
+![alt text](assets/image.png)
+
 ---
 
 ## Endpoints
