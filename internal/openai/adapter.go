@@ -43,8 +43,24 @@ type ChatRequest struct {
 // an array of content parts; we accept both via the custom unmarshaler
 // in normalizeMessages.
 type ChatMessage struct {
-	Role    string `json:"role"`
-	Content any    `json:"content"`
+	Role       string        `json:"role"`
+	Content    any           `json:"content"`
+	ToolCalls  []ToolCall    `json:"tool_calls,omitempty"`
+	ToolCallID string        `json:"tool_call_id,omitempty"`
+	Name       string        `json:"name,omitempty"`
+}
+
+// ToolCall is an OpenAI tool_call in an assistant message.
+type ToolCall struct {
+	ID       string   `json:"id"`
+	Type     string   `json:"type"`
+	Function FuncCall `json:"function"`
+}
+
+// FuncCall is the function details inside a tool_call.
+type FuncCall struct {
+	Name      string `json:"name"`
+	Arguments string `json:"arguments"`
 }
 
 // CommandCodeBody is the upstream shape this package emits.
@@ -64,7 +80,7 @@ type CommandParams struct {
 // CommandCodeMessage is one message in the upstream request.
 //
 // CommandCode (Anthropic-style API) requires:
-//   - role in {"user", "assistant", "tool"}
+//   - role in {"user", "assistant"}
 //   - content as an array of typed parts (NOT a plain string)
 //
 // We always emit content as an array even when there is just one text
@@ -79,8 +95,23 @@ type CommandCodeMessage struct {
 // inputs are flattened to a placeholder text part since CommandCode
 // support for vision through this proxy isn't validated yet).
 type CommandCodeContentPart struct {
-	Type string `json:"type"`
-	Text string `json:"text"`
+	Type       string  `json:"type"`
+	Text       string  `json:"text,omitempty"`
+	ID         string  `json:"id,omitempty"`
+	Name       string  `json:"name,omitempty"`
+	ToolCallID *string `json:"toolCallId,omitempty"`
+	ToolUseID  *string `json:"tool_use_id,omitempty"`
+	ToolName   *string `json:"toolName,omitempty"`
+	Content    any     `json:"content,omitempty"`
+	Arguments  any     `json:"arguments,omitempty"`
+}
+
+// ToolCallPart is a tool_use block in an assistant message.
+type ToolCallPart struct {
+	Type      string `json:"type"`
+	ID        string `json:"id"`
+	Name      string `json:"name"`
+	Arguments string `json:"arguments"`
 }
 
 // FlattenContent collapses a string-or-array content value into a single
@@ -165,8 +196,11 @@ func prependSystemText(sysText string, parts []CommandCodeContentPart) []Command
 //     is prepended). Multiple consecutive systems are joined with "\n\n".
 //     A trailing system (no user after) is attached to the last user
 //     message, or otherwise becomes a new user message at the end.
-//   - role is restricted to user/assistant/tool. Anything else is
+//   - role is restricted to user/assistant. Anything else is
 //     rewritten to "user" (CommandCode rejects unknown roles with 400).
+//   - tool role messages are converted to assistant messages with
+//     tool-result content blocks (CommandCode's expected format).
+//   - assistant messages with tool_calls get tool_use content blocks.
 //   - content is always emitted as a non-empty array of typed parts.
 func normalizeMessages(in []ChatMessage) []CommandCodeMessage {
 	out := make([]CommandCodeMessage, 0, len(in))
@@ -189,10 +223,36 @@ func normalizeMessages(in []ChatMessage) []CommandCodeMessage {
 			appendSystem(FlattenContent(m.Content))
 			continue
 		}
-		if role != "user" && role != "assistant" && role != "tool" {
+		if role == "tool" {
+			content := FlattenContent(m.Content)
+			tuid := m.ToolCallID
+			parts := []CommandCodeContentPart{{
+				Type:      "tool_result",
+				ToolUseID: &tuid,
+				Content:   []CommandCodeContentPart{{Type: "text", Text: content}},
+			}}
+			out = append(out, CommandCodeMessage{Role: "user", Content: parts})
+			continue
+		}
+		if role != "user" && role != "assistant" {
 			role = "user"
 		}
-		parts := flattenToParts(m.Content)
+		var parts []CommandCodeContentPart
+		if role == "assistant" && len(m.ToolCalls) > 0 {
+			if m.Content != nil {
+				parts = flattenToParts(m.Content)
+			}
+			for _, tc := range m.ToolCalls {
+				parts = append(parts, CommandCodeContentPart{
+					Type:      "tool_use",
+					ID:        tc.ID,
+					Name:      tc.Function.Name,
+					Arguments: tc.Function.Arguments,
+				})
+			}
+		} else {
+			parts = flattenToParts(m.Content)
+		}
 		if role == "user" && pendingSystem != "" {
 			parts = prependSystemText(pendingSystem, parts)
 			pendingSystem = ""
