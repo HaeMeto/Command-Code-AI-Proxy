@@ -105,9 +105,17 @@ func extractResponseMeta(body []byte) (responseBodyMeta, map[string]any) {
 		return responseBodyMeta{}, nil
 	}
 	var generic map[string]any
-	if err := json.Unmarshal(body, &generic); err != nil {
-		return responseBodyMeta{}, nil
+	if err := json.Unmarshal(body, &generic); err == nil {
+		meta := extractMetaFromObject(generic)
+		return meta, generic
 	}
+	if syn, meta := parseNDJSONResponse(body); syn != nil {
+		return meta, syn
+	}
+	return responseBodyMeta{}, nil
+}
+
+func extractMetaFromObject(generic map[string]any) responseBodyMeta {
 	meta := responseBodyMeta{}
 	if id, ok := generic["id"].(string); ok {
 		meta.MessageID = id
@@ -121,7 +129,128 @@ func extractResponseMeta(body []byte) (responseBodyMeta, map[string]any) {
 		meta.CacheRead = numAsInt(usage["cache_read_input_tokens"])
 		meta.CacheCreation = numAsInt(usage["cache_creation_input_tokens"])
 	}
-	return meta, generic
+	return meta
+}
+
+func parseNDJSONResponse(body []byte) (map[string]any, responseBodyMeta) {
+	lines := splitBodyLines(body)
+	if len(lines) == 0 {
+		return nil, responseBodyMeta{}
+	}
+	var firstType string
+	for _, line := range lines {
+		var ev map[string]any
+		if err := json.Unmarshal(line, &ev); err != nil {
+			continue
+		}
+		if t, ok := ev["type"].(string); ok && t != "" {
+			firstType = t
+			break
+		}
+	}
+	if firstType == "" {
+		return nil, responseBodyMeta{}
+	}
+
+	var contentParts []CommandCodeContentPart
+	var messageID string
+	var stopReason string
+	var inputTokens, outputTokens int64
+
+	for _, line := range lines {
+		var ev map[string]any
+		if err := json.Unmarshal(line, &ev); err != nil {
+			continue
+		}
+		evType, _ := ev["type"].(string)
+		switch evType {
+		case "text-delta":
+			if t, ok := ev["text"].(string); ok {
+				contentParts = append(contentParts, CommandCodeContentPart{Type: "text", Text: t})
+			}
+			if id, ok := ev["id"].(string); ok && messageID == "" {
+				messageID = id
+			}
+		case "text-start":
+			if id, ok := ev["id"].(string); ok && messageID == "" {
+				messageID = id
+			}
+		case "finish-step":
+			if fr, ok := ev["finishReason"].(string); ok {
+				stopReason = fr
+			}
+			if usage, ok := ev["usage"].(map[string]any); ok {
+				inputTokens = numAsInt(usage["inputTokens"])
+				outputTokens = numAsInt(usage["outputTokens"])
+			}
+		case "finish":
+			if fr, ok := ev["finishReason"].(string); ok && stopReason == "" {
+				stopReason = fr
+			}
+			if tu, ok := ev["totalUsage"].(map[string]any); ok {
+				if inputTokens == 0 {
+					inputTokens = numAsInt(tu["inputTokens"])
+				}
+				if outputTokens == 0 {
+					outputTokens = numAsInt(tu["outputTokens"])
+				}
+			}
+		}
+	}
+
+	if len(contentParts) == 0 {
+		return nil, responseBodyMeta{}
+	}
+
+	content := make([]any, len(contentParts))
+	for i, p := range contentParts {
+		content[i] = map[string]any{"type": p.Type, "text": p.Text}
+	}
+
+	synthetic := map[string]any{
+		"id":          messageID,
+		"role":        "assistant",
+		"content":     content,
+		"stop_reason": stopReason,
+		"usage": map[string]any{
+			"input_tokens":  float64(inputTokens),
+			"output_tokens": float64(outputTokens),
+		},
+	}
+
+	meta := responseBodyMeta{
+		MessageID:    messageID,
+		StopReason:   stopReason,
+		InputTokens:  inputTokens,
+		OutputTokens: outputTokens,
+	}
+	return synthetic, meta
+}
+
+type CommandCodeContentPart struct {
+	Type string `json:"type"`
+	Text string `json:"text"`
+}
+
+func splitBodyLines(body []byte) [][]byte {
+	var lines [][]byte
+	last := 0
+	for i := 0; i < len(body); i++ {
+		if body[i] == '\n' {
+			line := bytes.TrimSpace(body[last:i])
+			if len(line) > 0 {
+				lines = append(lines, line)
+			}
+			last = i + 1
+		}
+	}
+	if last < len(body) {
+		line := bytes.TrimSpace(body[last:])
+		if len(line) > 0 {
+			lines = append(lines, line)
+		}
+	}
+	return lines
 }
 
 func numAsInt(v any) int64 {

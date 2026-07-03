@@ -44,6 +44,8 @@ func Build(cfg config.Config, db *analytics.DB, p *proxy.Proxy) http.Handler {
 			ids, _ := db.DistinctModels(50)
 			return ids
 		},
+		cfg.UpstreamURL,
+		cfg.DefaultToken,
 	)))
 
 	mux.Handle("/analytics", admin(cfg, methodOnly(http.MethodGet, analyticsHandler(db))))

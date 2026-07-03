@@ -6,6 +6,8 @@ import (
 	"io"
 	"net/http"
 	"strconv"
+	"sync"
+	"time"
 
 	"github.com/maystri21store-pixel/memory-md-generator/commandcode-proxy/internal/analytics"
 	"github.com/maystri21store-pixel/memory-md-generator/commandcode-proxy/internal/proxy"
@@ -122,20 +124,90 @@ func Handler(p *proxy.Proxy) http.Handler {
 //     analytics history, so any model the proxy has actually been used
 //     with shows up in the advertised list even if it wasn't pre-added
 //     to OPENAI_MODELS. Pass nil if no dynamic source is wanted.
+//   - upstream: fetched from the CommandCode /provider/v1/models endpoint,
+//     cached for 5 minutes to avoid hammering upstream.
 //
 // Note: /v1/chat/completions never gates on this list — any model name
 // the client sends is forwarded verbatim to upstream as `params.model`.
 // /v1/models is purely advertising.
-func ModelsHandler(envIDs []string, extras func() []string) http.Handler {
+func ModelsHandler(envIDs []string, extras func() []string, upstreamURL, defaultToken string) http.Handler {
+	cache := &modelsCache{
+		upstreamURL: upstreamURL,
+		token:       defaultToken,
+		ttl:         5 * time.Minute,
+	}
 	return http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 		ids := envIDs
 		if extras != nil {
-			ids = MergeModelLists(envIDs, extras())
+			ids = MergeModelLists(ids, extras())
+		}
+		if upstream := cache.get(); len(upstream) > 0 {
+			ids = MergeModelLists(ids, upstream)
 		}
 		out := BuildModelsResponse(ids)
 		w.Header().Set("Content-Type", "application/json")
 		_ = json.NewEncoder(w).Encode(out)
 	})
+}
+
+type modelsCache struct {
+	mu          sync.Mutex
+	upstreamURL string
+	token       string
+	ttl         time.Duration
+	models      []string
+	expiresAt   time.Time
+}
+
+type upstreamModel struct {
+	ID string `json:"id"`
+}
+
+type upstreamModelsResponse struct {
+	Data []upstreamModel `json:"data"`
+}
+
+func (c *modelsCache) get() []string {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	if c.models != nil && time.Now().Before(c.expiresAt) {
+		return c.models
+	}
+	c.models = c.fetch()
+	c.expiresAt = time.Now().Add(c.ttl)
+	return c.models
+}
+
+func (c *modelsCache) fetch() []string {
+	url := c.upstreamURL + "/provider/v1/models"
+	req, err := http.NewRequest(http.MethodGet, url, nil)
+	if err != nil {
+		return nil
+	}
+	if c.token != "" {
+		req.Header.Set("Authorization", "Bearer "+c.token)
+	}
+	client := &http.Client{Timeout: 10 * time.Second}
+	resp, err := client.Do(req)
+	if err != nil {
+		return nil
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != 200 {
+		return nil
+	}
+	body, _ := io.ReadAll(resp.Body)
+	var parsed upstreamModelsResponse
+	if err := json.Unmarshal(body, &parsed); err != nil {
+		return nil
+	}
+	ids := make([]string, 0, len(parsed.Data))
+	for _, m := range parsed.Data {
+		if m.ID != "" {
+			ids = append(ids, m.ID)
+		}
+	}
+	return ids
 }
 
 func writeError(w http.ResponseWriter, status int, kind, message string) {

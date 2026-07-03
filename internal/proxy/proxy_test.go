@@ -76,6 +76,55 @@ func TestForward_Success_RecordsAnalytics(t *testing.T) {
 	}
 }
 
+func TestForward_NDJSONResponse(t *testing.T) {
+	ndjson := []byte(`{"type":"start"}
+{"type":"text-start","id":"0"}
+{"type":"text-delta","id":"0","text":" Hello"}
+{"type":"text-end","id":"0"}
+{"type":"finish-step","finishReason":"stop","usage":{"inputTokens":5000,"outputTokens":5}}
+{"type":"finish","finishReason":"stop","totalUsage":{"inputTokens":5000,"outputTokens":5}}`)
+
+	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/x-ndjson")
+		w.WriteHeader(200)
+		_, _ = w.Write(ndjson)
+	}))
+	defer upstream.Close()
+
+	db := newDB(t)
+	cfg := config.Config{UpstreamURL: upstream.URL, DefaultVersion: "0.18.10"}
+	p := New(cfg, db, http.DefaultClient)
+
+	body := []byte(`{"params":{"provider":"command-code","model":"x"},"memory":""}`)
+	req := httptest.NewRequest(http.MethodPost, "/alpha/generate", bytes.NewReader(body))
+	req.Header.Set("Authorization", "Bearer test")
+
+	res := p.Forward(req, ForwardOptions{Body: body})
+	if res.StatusCode != 200 {
+		t.Fatalf("status = %d, err=%q", res.StatusCode, res.ErrorMessage)
+	}
+	if res.ParsedBody == nil {
+		t.Fatal("ParsedBody is nil")
+	}
+	content := res.ParsedBody["content"]
+	parts, ok := content.([]any)
+	if !ok || len(parts) != 1 {
+		t.Fatalf("content = %+v, want 1 part", content)
+	}
+	part := parts[0].(map[string]any)
+	if part["text"] != " Hello" {
+		t.Errorf("text = %q, want %q", part["text"], " Hello")
+	}
+	if res.ParsedBody["stop_reason"] != "stop" {
+		t.Errorf("stop_reason = %q", res.ParsedBody["stop_reason"])
+	}
+
+	s, _ := db.Summary()
+	if s.Totals.TotalInputTokens != 5000 || s.Totals.TotalOutputTokens != 5 {
+		t.Errorf("tokens = %+v", s.Totals)
+	}
+}
+
 func TestForward_DefaultTokenAppliedWhenMissing(t *testing.T) {
 	var seen http.Header
 	upstream := upstreamMock(t, &seen, map[string]any{"id": "x", "usage": map[string]any{"input_tokens": 1, "output_tokens": 1}})
